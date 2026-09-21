@@ -1,0 +1,32 @@
+name: Automatisation Veille Emploi
+
+on:
+  workflow_dispatch: # Permet de lancer manuellement depuis l'onglet Actions de GitHub
+  schedule:
+    - cron: "0 */6 * * *" # S'exécute automatiquement toutes les 6 heures
+
+jobs:
+  executer-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Exécuter le script
+        env:
+          GEMINI_API: ${{ secrets.GEMINI_API }}
+          GMAIL: ${{ secrets.GMAIL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          DEBUG: "False"
+        run: python Jobs.py
