@@ -144,7 +144,7 @@ def executer_veille():
 
                 # Appel à Gemini avec Structured Outputs
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3.6-flash',
                     contents=f"{PROMPT_INSTRUCTION}\n\nTitre : {titre}\nDescription :\n{description}",
                     config={
                         'response_mime_type': 'application/json',
