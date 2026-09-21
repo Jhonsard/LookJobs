@@ -1,6 +1,9 @@
 import os
 import sqlite3
+import time
+import json
 import feedparser
+import requests
 from dotenv import load_dotenv as lde
 from email.mime.text import MIMEText
 import smtplib
@@ -100,12 +103,10 @@ def executer_veille():
     for source in SOURCES_D_EMPLOI:
         print(f"\n🌐 Extraction depuis : {source['nom']}")
         try:
-            # Gestion basique si c'est l'API JSON de Remotive ou un flux RSS classique
+            entries = []
             if "api/remote-jobs" in source['url']:
-                import requests
                 resp = requests.get(source['url'], timeout=10)
                 data = resp.json().get('jobs', [])[:5]
-                entries = []
                 for item in data:
                     entries.append({
                         'id': str(item.get('id', item.get('url'))),
@@ -115,7 +116,6 @@ def executer_veille():
                     })
             else:
                 flux = feedparser.parse(source['url'])
-                entries = []
                 for entry in flux.entries[:5]:
                     entries.append({
                         'id': entry.get('id', entry.get('link', '')),
@@ -133,7 +133,7 @@ def executer_veille():
                 if not offre_id:
                     continue
 
-                # Vérifier si l'offre a déjà été traitée lors d'une précédente exécution
+                # Vérifier si l'offre a déjà été traitée
                 if offre_deja_traitee(offre_id):
                     if MODE_DEBUG:
                         print(f"   ⏩ Déjà vue : {titre}")
@@ -142,31 +142,48 @@ def executer_veille():
                 if MODE_DEBUG:
                     print(f"   🔍 Analyse de : {titre}")
 
-                # Appel à Gemini avec Structured Outputs
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=f"{PROMPT_INSTRUCTION}\n\nTitre : {titre}\nDescription :\n{description}",
-                    config={
-                        'response_mime_type': 'application/json',
-                        'response_schema': EvaluationOffre,
-                    },
-                )
-                
-                import json
-                resultat_json = json.loads(response.text)
-                
-                # Marquer l'offre comme traitée pour ne plus jamais l'analyser
-                marquer_comme_traitee(offre_id, titre, source['nom'])
+                # Appel à Gemini avec gestion des erreurs 503 (Tentatives multiples)
+                max_tentatives = 3
+                succes_appel = False
+                resultat_json = None
 
-                if resultat_json.get("valide"):
-                    print(f"   🎯 Offre validée : {titre}")
-                    envoyer_email(titre, lien, source['nom'], resultat_json.get("resume"))
-                else:
-                    if MODE_DEBUG:
-                        print(f"   ❌ Rejetée.")
+                for tentative in range(max_tentatives):
+                    try:
+                        response = client.models.generate_content(
+                            model='gemini-3.6-flash',
+                            contents=f"{PROMPT_INSTRUCTION}\n\nTitre : {titre}\nDescription :\n{description}",
+                            config={
+                                'response_mime_type': 'application/json',
+                                'response_schema': EvaluationOffre,
+                            },
+                        )
+                        resultat_json = json.loads(response.text)
+                        succes_appel = True
+                        break # Sort de la boucle si l'appel réussit
+                        
+                    except Exception as e:
+                        if "503" in str(e) or "UNAVAILABLE" in str(e):
+                            if tentative < max_tentatives - 1:
+                                print(f"   ⏳ Serveur surchargé (503), nouvelle tentative dans 5s... ({tentative + 1}/{max_tentatives})")
+                                time.sleep(5)
+                            else:
+                                print(f"   ❌ Échec après {max_tentatives} tentatives (serveur surchargé).")
+                        else:
+                            print(f"   ⚠️ Erreur API : {e}")
+                            break
+
+                # Si l'appel a réussi, on traite le résultat
+                if succes_appel and resultat_json:
+                    marquer_comme_traitee(offre_id, titre, source['nom'])
+                    if resultat_json.get("valide"):
+                        print(f"   🎯 Offre validée : {titre}")
+                        envoyer_email(titre, lien, source['nom'], resultat_json.get("resume"))
+                    else:
+                        if MODE_DEBUG:
+                            print(f"   ❌ Rejetée.")
 
         except Exception as e:
             print(f"⚠️ Erreur de lecture sur {source['nom']} : {e}")
 
 if __name__ == "__main__":
-    executer_veille() 
+    executer_veille()
